@@ -1,11 +1,22 @@
-from agno.agent import Agent
-from agno.tools.file import FileTools
+import os
 
-def backend_dev_agent(model, backend_dir):
+from agno.agent import Agent
+from agno.models.ollama import Ollama
+from agno.tools.file import FileTools
+from dotenv import load_dotenv
+
+load_dotenv()
+
+dev_model = Ollama(
+    id=os.getenv("OLLAMA_MODEL")
+)
+
+
+def backend_dev_agent(backend_dir):
     return Agent(
         name="Backend Dev Agent",
         role="Desenvolvimento da API",
-        model=model,
+        model=dev_model,
         tools=[FileTools(base_dir=backend_dir)],
         instructions=[
             "Criar FastAPI app.",

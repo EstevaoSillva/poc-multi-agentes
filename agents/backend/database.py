@@ -1,15 +1,14 @@
 import os
 
 from agno.agent import Agent
-from agno.models.groq import Groq
+from agno.models.ollama import Ollama
 from agno.tools.file import FileTools
 from dotenv import load_dotenv
 
 load_dotenv()
 
-db_model = Groq(
-    id="openai/gpt-oss-120b",
-    api_key=os.getenv("GROQ_API_KEY_DATABASE")
+db_model = Ollama(
+    id=os.getenv("OLLAMA_MODEL")
 )
 
 def backend_db_agent(backend_dir):

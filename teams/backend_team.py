@@ -1,22 +1,35 @@
-from agno.team import Team
+import os
 from pathlib import Path
-from agents.backend.infra import backend_infra_agent
+
+from agno.models.ollama import Ollama
+from agno.team import Team
+from dotenv import load_dotenv
+
 from agents.backend.database import backend_db_agent
-from agents.backend.dev import backend_dev_agent
+from agents.backend.development import backend_dev_agent
+from agents.backend.infra import backend_infra_agent
 from agents.backend.test import backend_test_agent
 
-def build_backend_team(model):
+load_dotenv()
+
+def build_backend_team():
+
+
+    team_back_model = Ollama(
+    id=os.getenv("OLLAMA_MODEL")
+)
+
     backend_dir = Path("./my_app/backend")
 
     return Team(
         name="Backend Team",
         role="Equipe de Backend",
-        model=model,
+        model=team_back_model,
         members=[
-            backend_infra_agent(model, backend_dir),
-            backend_db_agent(model, backend_dir),
-            backend_dev_agent(model, backend_dir),
-            backend_test_agent(model, backend_dir),
+            backend_infra_agent(backend_dir),
+            backend_db_agent(backend_dir),
+            backend_dev_agent(backend_dir),
+            backend_test_agent(backend_dir),
         ],
         instructions=[
             "Executar na ordem: Infra → Database → Dev → Test.",

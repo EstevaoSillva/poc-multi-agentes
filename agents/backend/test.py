@@ -1,11 +1,21 @@
-from agno.agent import Agent
-from agno.tools.file import FileTools
+import os
 
-def backend_test_agent(model, backend_dir):
+from agno.agent import Agent
+from agno.models.ollama import Ollama
+from agno.tools.file import FileTools
+from dotenv import load_dotenv
+
+load_dotenv()
+
+test_model = Ollama(
+    id=os.getenv("OLLAMA_MODEL")
+)
+
+def backend_test_agent(backend_dir):
     return Agent(
         name="Backend Test Agent",
         role="Testes do backend",
-        model=model,
+        model=test_model,
         tools=[FileTools(base_dir=backend_dir)],
         instructions=[
             "Criar testes com pytest.",

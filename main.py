@@ -20,5 +20,8 @@ product_team.run(
     - Testes básicos
     """,
     stream=False,
+    debug=True,
+    debug_level=2
+
 )
 print("✅ Finalizado.")
