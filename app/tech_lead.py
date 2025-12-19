@@ -1,16 +1,12 @@
-import os
-
-from agno.models.groq import Groq
+from agno.models.ollama import Ollama
 from agno.team import Team
-from dotenv import load_dotenv
 
-load_dotenv()
+from app.agent_back import backend_agent
+from app.agent_front import frontend_agent
 
-model = Groq(
-    id="openai/gpt-oss-120b",
-    api_key=os.getenv("GROQ_FRONTEND_KEY")
-)
 
+model = Ollama(id="mistral:7b")
+members = [backend_agent, frontend_agent]
 
 def create_team(backend_agent, frontend_agent):
     tech_lead = Team(

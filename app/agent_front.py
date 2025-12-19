@@ -1,18 +1,16 @@
-import os
-from agno.agent import Agent
-from agno.models.groq import Groq
-from agno.tools.file import FileTools
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
+from agno.agent import Agent
+from agno.models.ollama import Ollama
+from agno.tools.file import FileTools
 
 FRONTEND_ROOT = Path("my_app/frontend").resolve()
 FRONTEND_ROOT.mkdir(parents=True, exist_ok=True)
 
-frontend_model = Groq(
-    id="openai/gpt-oss-120b",
-    api_key=os.getenv("GROQ_FRONTEND_KEY")
+frontend_model = Ollama(
+    id="mistral:7b",
 )
 
 frontend_agent = Agent(

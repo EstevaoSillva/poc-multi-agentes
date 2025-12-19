@@ -1,18 +1,14 @@
-import os
-from agno.models.groq import Groq
-from agno.agent import Agent
-from agno.tools.file import FileTools
 from pathlib import Path
-from dotenv import load_dotenv
-load_dotenv()
 
+from agno.agent import Agent
+from agno.models.ollama import Ollama
+from agno.tools.file import FileTools  # Ferramenta essencial para escrever código
 
 BACKEND_ROOT = Path("my_app/backend").resolve()
 BACKEND_ROOT.mkdir(parents=True, exist_ok=True)
 
-backend_model = Groq(
-    id="openai/gpt-oss-120b",
-    api_key=os.getenv("GROQ_BACKEND_KEY")
+backend_model = Ollama(
+    id="mistral:7b",
 )
 
 backend_agent = Agent(
