@@ -3,6 +3,7 @@ import os
 from agno.agent import Agent
 from agno.models.ollama import Ollama
 from agno.tools.file import FileTools
+from agno.tools.duckduckgo import DuckDuckGoTools
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,7 +17,7 @@ def frontend_test_agent(frontend_dir):
         name="Frontend Test Agent",
         role="Testes e validação do frontend",
         model=test_model,
-        tools=[FileTools(base_dir=frontend_dir)],
+        tools=[FileTools(base_dir=frontend_dir), DuckDuckGoTools()],
         instructions=[
             "Validar se a UI carrega corretamente.",
             "Verificar chamadas fetch.",
