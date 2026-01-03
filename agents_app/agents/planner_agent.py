@@ -1,24 +1,36 @@
-from agno.agent import Agent
-from agents_app.llm.ollama_provider import get_llm
-from agents_app.tools.diff_tool import DiffTool
-from agents_app.tools.delete_file import DeleteFileTool
-from agents_app.tools.list_files import ListFilesTool
-from agents_app.tools.read_file import ReadFileTool
-from agents_app.tools.write_file import WriteFileTool
+PLANNER_PROMPT = """
+    {context}
+    
+        Rules:
+        - Decide only ONE next action
+        - Prefer execution over explanation
+        - If no files exist, start by creating project structure
+        - Return STRICT JSON only
+        
+        Possible intents:
+        - create_project_structure
+        - generate_backend
+        - generate_frontend
+        - generate_shared_code
+        - explain_next_steps
+        
+        Respond with:
+        {
+          "strategy": "...",
+          "intent": "...",
+          "confidence": 0.0,
+          "reason": "...",
+          "tools": []
+        }
+    """
 
+class PlannerAgent:
+    def __init__(self, llm):
+        self.llm = llm
 
-planner_agent = Agent(
-    name="PlannerAgent",
-    model=get_llm(),
-    tools=[
-        DiffTool(),
-        ReadFileTool(),
-        WriteFileTool(),
-        DeleteFileTool(),
-        ListFilesTool(),
-    ],
-    instructions="""
-            You decide which tools to use.
-            Never modify files without showing diff.
-        """
-)
+    def run(self, context_prompt: str) -> dict:
+        response = self.llm.generate(
+            PLANNER_PROMPT.format(context=context_prompt)
+        )
+
+        return response

@@ -142,6 +142,8 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Caminho para o diretório de workspace dos agentes
+WORKSPACE_PATH = os.environ.get('WORKSPACE_PATH', os.path.join(BASE_DIR, 'workspace'))
 
 REST_FRAMEWORK = {
     # Configuração de Paginação Padrão

@@ -40,6 +40,7 @@ class Session(ModelBase):
         on_delete=models.CASCADE,
         verbose_name='User',
     )
+    context = models.JSONField(default=dict, blank=True)
     title = models.CharField(max_length=255, verbose_name='Title')
     last_interaction_at = models.DateTimeField(auto_now=True, verbose_name='Last_interaction_at')
     history = HistoricalRecords(table_name='"history"."session_history"')
