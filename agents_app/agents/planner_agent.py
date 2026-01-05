@@ -23,5 +23,7 @@ planner_agent = Agent(
             "Initialize frontend project"
           ]
         }
-        """
+        """,
+    debug_mode=True,
+    debug_level=2
 )

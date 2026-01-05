@@ -7,7 +7,8 @@ def context_to_prompt(context: dict) -> str:
     )
 
     # Identidade da sessão
-    prompt.append(f"Session title: {context['session_title']}")
+    title = context.get('session_title') or context.get('app_name') or "Untitled Project"
+    prompt.append(f"Session title: {title}")
 
     # Projeto
     project = context.get("project", {})

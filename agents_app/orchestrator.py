@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from agents_app.agents.generator_agent import generator_agent
-from agents_app.agents.intent_agent import intent_agent
+from agents_app.agents.intent_agent import intent_router_agent
 from agents_app.agents.planner_agent import planner_agent
 from agents_app.agents.response_agent import response_agent
 from agents_app.agents.reviewer_agent import reviewer_agent
@@ -13,7 +13,11 @@ from agents_app.api.models import (
 )
 from agents_app.context.builder import build_context
 from agents_app.context.prompt_adapter import context_to_prompt
+from agents_app.services.auto_fix_service import AutoFixService
+from agents_app.services.editor_service import EditorService
+from agents_app.services.intent_service import IntentService
 from agents_app.services.project_generator import ProjectGeneratorService
+from agents_app.services.test_service import TestService
 from agents_app.tools import (
     read_file,
     write_file,
@@ -52,6 +56,7 @@ class CopilotOrchestrator:
         self.workspace_root = Path(workspace_path)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.planner_agent = planner_agent
+        self.intent_service = IntentService()
 
     # -----------------------------------
     # SESSION WORKSPACE
@@ -83,7 +88,7 @@ class CopilotOrchestrator:
         generator = ProjectGeneratorService(workspace)
 
         result = generator.generate_minimal_fastapi_project(
-            description=session.context.get("description", "")
+            description=context_prompt
         )
 
         return {
@@ -92,6 +97,31 @@ class CopilotOrchestrator:
             "project_path": str(workspace),
             "files_created": result["files"],
         }
+
+    # -----------------------------------
+    # INTENT HANDLING
+    # -----------------------------------
+    def handle(self, user_input: str):
+        intent_data = self.intent_service.resolve(user_input)
+        intent = intent_data["intent"]
+
+        if intent == "create_backend":
+            return ProjectGeneratorService(...).generate_minimal_fastapi_project(user_input)
+
+        elif intent == "edit_project":
+            return EditorService(...).edit(user_input)
+
+        elif intent == "test_project":
+            return TestService(...).run(user_input)
+
+        elif intent == "auto_fix_project":
+            return AutoFixService(...).run(user_input)
+
+        return {
+            "status": "ignored",
+            "reason": "Intent not actionable"
+        }
+
 
     # -----------------------------------
     # SECURITY POLICY
@@ -194,7 +224,7 @@ class CopilotOrchestrator:
         # -----------------------------------
         # INTENT
         # -----------------------------------
-        intent = intent_agent.run(
+        intent = intent_router_agent.run(
             f"""
             {context_prompt}
 

@@ -39,5 +39,7 @@ app_ideation_agent = Agent(
             "database": "string"
           }
         }
-        """
+        """,
+    debug_mode=True,
+    debug_level=2
 )
