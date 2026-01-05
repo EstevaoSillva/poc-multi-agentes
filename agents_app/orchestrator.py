@@ -1,21 +1,19 @@
 import json
 from pathlib import Path
 
-from agents_app import llm
-from agents_app.agents import planner_agent
 from agents_app.agents.generator_agent import generator_agent
 from agents_app.agents.intent_agent import intent_agent
-from agents_app.agents.planner_agent import PlannerAgent
+from agents_app.agents.planner_agent import planner_agent
 from agents_app.agents.response_agent import response_agent
 from agents_app.agents.reviewer_agent import reviewer_agent
 from agents_app.api.models import (
-    Session,
     Interaction,
     ToolExecution,
     PendingAction,
 )
 from agents_app.context.builder import build_context
 from agents_app.context.prompt_adapter import context_to_prompt
+from agents_app.services.project_generator import ProjectGeneratorService
 from agents_app.tools import (
     read_file,
     write_file,
@@ -53,7 +51,7 @@ class CopilotOrchestrator:
     def __init__(self, workspace_path: str):
         self.workspace_root = Path(workspace_path)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
-        self.planner_agent = self.planner_agent
+        self.planner_agent = planner_agent
 
     # -----------------------------------
     # SESSION WORKSPACE
@@ -65,6 +63,35 @@ class CopilotOrchestrator:
             (session_path / sub).mkdir(parents=True, exist_ok=True)
 
         return session_path
+
+    # -----------------------------------
+    # START PROJECT (NO LLM)
+    # -----------------------------------
+    def start(self, session_id: int) -> dict:
+        """
+        Inicializa a estrutura base do projeto.
+
+        """
+        from agents_app.api.models import Session
+
+        session = Session.objects.get(id=session_id)
+        workspace = self._ensure_session_workspace(session.id)
+
+        context = build_context(session.id)
+        context_prompt = context_to_prompt(context)
+
+        generator = ProjectGeneratorService(workspace)
+
+        result = generator.generate_minimal_fastapi_project(
+            description=session.context.get("description", "")
+        )
+
+        return {
+            "message": "Iniciando as tasks...",
+            "session_id": session.id,
+            "project_path": str(workspace),
+            "files_created": result["files"],
+        }
 
     # -----------------------------------
     # SECURITY POLICY
@@ -115,8 +142,9 @@ class CopilotOrchestrator:
     # MAIN ENTRYPOINT
     # -----------------------------------
     def run(self, session_id: int, user_input: str) -> dict:
+        from agents_app.api.models import Session
         session = Session.objects.get(id=session_id)
-        self.planner_agent = PlannerAgent(self)
+        self.planner_agent = planner_agent
 
         # -----------------------------------
         # WORKSPACE

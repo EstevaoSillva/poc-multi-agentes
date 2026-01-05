@@ -1,36 +1,27 @@
-PLANNER_PROMPT = """
-    {context}
-    
-        Rules:
-        - Decide only ONE next action
-        - Prefer execution over explanation
-        - If no files exist, start by creating project structure
-        - Return STRICT JSON only
+from agno.agent import Agent
+
+from agents_app.llm.ollama_provider import get_llm
+
+planner_agent = Agent(
+    name="PlannerAgent",
+    model=get_llm(),
+    instructions="""
+        You are a senior software architect.
         
-        Possible intents:
-        - create_project_structure
-        - generate_backend
-        - generate_frontend
-        - generate_shared_code
-        - explain_next_steps
+        Given a project context, create an execution plan.
         
-        Respond with:
+        Return STRICT JSON:
         {
-          "strategy": "...",
-          "intent": "...",
-          "confidence": 0.0,
-          "reason": "...",
-          "tools": []
+          "project_type": "web_app",
+          "structure": {
+            "frontend": ["src", "public"],
+            "backend": ["src", "tests"],
+            "shared": ["docs"]
+          },
+          "next_steps": [
+            "Initialize backend project",
+            "Initialize frontend project"
+          ]
         }
-    """
-
-class PlannerAgent:
-    def __init__(self, llm):
-        self.llm = llm
-
-    def run(self, context_prompt: str) -> dict:
-        response = self.llm.generate(
-            PLANNER_PROMPT.format(context=context_prompt)
-        )
-
-        return response
+        """
+)
