@@ -1,9 +1,11 @@
+"""Core pipeline agents - Intent routing."""
+
 from agno.agent import Agent
 from agents_app.llm.ollama_provider import get_llm
 
 intent_router_agent = Agent(
     name="IntentRouter",
-    model=get_llm(),
+    model=get_llm("chat"),
     instructions="""
         You are an intent classification agent.
         

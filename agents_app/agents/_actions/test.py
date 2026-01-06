@@ -1,9 +1,11 @@
+"""Action agents - Testing."""
+
 from agno.agent import Agent
 from agents_app.llm.ollama_provider import get_llm
 
 test_agent = Agent(
     name="ProjectTester",
-    model=get_llm(),
+    model=get_llm("code"),
     instructions="""
         You are a strict software quality auditor.
         

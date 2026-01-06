@@ -8,8 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from agents_app.agents.app_ideation_agent import app_ideation_agent
-from agents_app.agents.planner_agent import planner_agent
+from agents_app.agents import app_ideation_agent, planner_agent
 from agents_app.api.models import Session, Interaction, ToolExecution, PendingAction
 from agents_app.api.serializers import (
     SessionSerializer,
@@ -133,26 +132,63 @@ class IdeationAPIView(APIView):
 
         output = app_ideation_agent.run(user_prompt)
         raw_text = output.content if hasattr(output, "content") else str(output)
-
         try:
             ideation = json.loads(raw_text)
         except json.JSONDecodeError:
-            return Response(
-                {
-                    "error": "LLM did not return valid JSON",
-                    "raw_output": raw_text
+            # If we couldn't parse JSON, coerce into a minimal dict so Session.context
+            # is always a JSON-serializable object. Preserve raw output in `raw_ideation`.
+            ideation = {
+                "app_name": (user_prompt.split('\n', 1)[0][:30] if user_prompt else "App"),
+                "category": "unspecified",
+                "description": raw_text.strip().replace('\n', ' '),
+                "suggested_stack": {
+                    "backend": "fastapi",
+                    "frontend": "html_css_js",
+                    "database": "postgres"
                 },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+                "raw_ideation": raw_text,
+            }
 
-        # 🔥 CRIAÇÃO DA SESSION
+        # Normalize ideation to ensure required keys exist and context is JSON-serializable
+        app_name = ideation.get("app_name") or (user_prompt.split('\n', 1)[0][:30] if user_prompt else "App")
+        category = ideation.get("category") or "unspecified"
+        description_text = ideation.get("description") or raw_text.strip().replace('\n', ' ')
+        suggested_stack = ideation.get("suggested_stack") or {
+            "backend": "fastapi",
+            "frontend": "html_css_js",
+            "database": "postgres",
+        }
+
+        # Ensure suggested_stack has recommended/options shape if model returned the new format
+        if isinstance(suggested_stack, dict):
+            # if the shape is {backend: {recommended: ...}} extract recommended values when possible
+            backend_field = suggested_stack.get("backend")
+            if isinstance(backend_field, dict) and "recommended" in backend_field:
+                suggested_stack_backend = backend_field.get("recommended")
+            else:
+                suggested_stack_backend = backend_field
+
+            frontend_field = suggested_stack.get("frontend")
+            if isinstance(frontend_field, dict) and "recommended" in frontend_field:
+                suggested_stack_frontend = frontend_field.get("recommended")
+            else:
+                suggested_stack_frontend = frontend_field
+
+            # rebuild minimal suggested_stack
+            suggested_stack = {
+                "backend": suggested_stack_backend or "fastapi",
+                "frontend": suggested_stack_frontend or "html_css_js",
+                "database": "postgres",
+            }
+
+        # 🔥 CRIAÇÃO DA SESSION — always save `context` as a JSON-serializable dict
         session = Session.objects.create(
             user=user,
-            title=ideation["app_name"],
+            title=app_name,
             context={
-                "category": ideation["category"],
-                "description": ideation["description"],
-                "suggested_stack": ideation["suggested_stack"],
+                "category": category,
+                "description": description_text,
+                "suggested_stack": suggested_stack,
                 "original_prompt": user_prompt,
             }
         )

@@ -1,10 +1,11 @@
-from agno.agent import Agent
+"""Core pipeline agents - Planning."""
 
+from agno.agent import Agent
 from agents_app.llm.ollama_provider import get_llm
 
 planner_agent = Agent(
     name="PlannerAgent",
-    model=get_llm(),
+    model=get_llm("code"),
     instructions="""
         You are a senior software architect.
         

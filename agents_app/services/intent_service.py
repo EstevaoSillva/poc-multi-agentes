@@ -1,4 +1,4 @@
-from agents_app.agents.intent_agent import intent_router_agent
+from agents_app.agents import intent_router_agent
 from agents_app.utils import safe_json_parse
 
 

@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
 
-from agents_app.agents.generator_agent import generator_agent
-from agents_app.agents.intent_agent import intent_router_agent
-from agents_app.agents.planner_agent import planner_agent
-from agents_app.agents.response_agent import response_agent
-from agents_app.agents.reviewer_agent import reviewer_agent
+from agents_app.agents import (
+    generator_agent,
+    intent_router_agent,
+    planner_agent,
+    response_agent,
+    reviewer_agent,
+    build_product_team,
+)
 from agents_app.api.models import (
     Interaction,
     ToolExecution,
@@ -18,6 +21,9 @@ from agents_app.services.editor_service import EditorService
 from agents_app.services.intent_service import IntentService
 from agents_app.services.project_generator import ProjectGeneratorService
 from agents_app.services.test_service import TestService
+from agents_app.services.session_memory import SessionMemory
+from agents_app.tools.tool_broker import create_broker
+from agents_app.tools.tool_registration import register_default_tools
 from agents_app.tools import (
     read_file,
     write_file,
@@ -57,6 +63,9 @@ class CopilotOrchestrator:
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.planner_agent = planner_agent
         self.intent_service = IntentService()
+        
+        # Initialize tool registry
+        register_default_tools()
 
     # -----------------------------------
     # SESSION WORKSPACE
@@ -86,10 +95,20 @@ class CopilotOrchestrator:
         context_prompt = context_to_prompt(context)
 
         generator = ProjectGeneratorService(workspace)
+        # Prefer passing structured session context (ideation JSON) to the generator
+        # so it can read `suggested_stack` and `complexity`. Fall back to the
+        # textual context prompt if no structured context is available.
+        description_payload = None
+        try:
+            if session.context and isinstance(session.context, dict):
+                description_payload = json.dumps(session.context, ensure_ascii=False)
+        except Exception:
+            description_payload = None
 
-        result = generator.generate_minimal_fastapi_project(
-            description=context_prompt
-        )
+        description = description_payload or context_prompt
+
+        # Use the newer method that respects planner/intent and suggested_stack
+        result = generator.generate_project_from_description(description)
 
         return {
             "message": "Iniciando as tasks...",
@@ -169,45 +188,132 @@ class CopilotOrchestrator:
         return results
 
     # -----------------------------------
-    # MAIN ENTRYPOINT
+    # RUN WITH TEAMS (SPECIALIZED MODE)
     # -----------------------------------
-    def run(self, session_id: int, user_input: str) -> dict:
+    def run_with_teams(self, session_id: int, user_input: str) -> dict:
+        """
+        Execute using specialized teams for coordinated development.
+        
+        This mode uses Product Team which orchestrates Backend and Frontend teams,
+        each with specialized agents for infrastructure, development, and testing.
+        
+        Args:
+            session_id: Session ID
+            user_input: User request
+        
+        Returns:
+            dict with execution results from teams
+        """
+        from agents_app.api.models import Session
+        
+        session = Session.objects.get(id=session_id)
+        workspace = self._ensure_session_workspace(session.id)
+        memory = SessionMemory(session_id, workspace)
+        
+        # Retrieve RAG context for this request
+        rag_context = memory.get_rag_context(user_input, top_k=3)
+        
+        # Enhance user input with RAG context
+        enhanced_input = f"{rag_context}\n\n{user_input}"
+        
+        # Build product team with session workspace
+        product_team = build_product_team(session_workspace=workspace)
+        
+        # Execute team with RAG-enhanced input
+        try:
+            result = product_team.run(enhanced_input)
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+                "mode": "teams",
+                "workspace": str(workspace),
+            }
+        
+        # Record in memory
+        memory.add_interaction(
+            user_input=user_input,
+            response=result,
+        )
+        return {
+            "status": "success",
+            "mode": "teams",
+            "session_id": session.id,
+            "workspace": str(workspace),
+            "result": result,
+            "memory": memory.get_full_context(),
+            "audit": memory.embeddings.get_stats(),
+        }
+    
+    # -----------------------------------
+    # MAIN ENTRYPOINT (HYBRID MODE)
+    # -----------------------------------
+    def run(self, session_id: int, user_input: str, use_teams: bool = None) -> dict:
+        """
+        Execute orchestration with intent-based selection (Opção B).
+        
+        If use_teams is not specified, automatically selects based on intent:
+        - CREATE intents → use teams (specialized)
+        - Other intents → use agents (flexible)
+        
+        Args:
+            session_id: Session ID
+            user_input: User request
+            use_teams: Force use of teams (None = auto-select)
+        
+        Returns:
+            dict with execution results
+        """
+        from agents_app.api.models import Session
+        
+        # Detect intent first
+        intent_output = intent_router_agent.run(
+            f"{user_input}\n\nClassify the intent (create_backend, create_frontend, edit_project, test_project, unknown)"
+        )
+        
+        # Extract intent from response
+        try:
+            intent_data = json.loads(intent_output) if isinstance(intent_output, str) and intent_output.startswith("{") else {"intent": intent_output.strip()}
+            detected_intent = intent_data.get("intent", "unknown")
+        except:
+            detected_intent = "unknown"
+        
+        # Auto-select mode if not specified
+        if use_teams is None:
+            use_teams = detected_intent in ["create_backend", "create_frontend"]
+        
+        # Use teams for creation intents
+        if use_teams:
+            return self.run_with_teams(session_id, user_input)
+        
+        # Otherwise use traditional agent pipeline
+        return self.run_with_agents(session_id, user_input)
+    
+    def run_with_agents(self, session_id: int, user_input: str) -> dict:
+        """
+        Execute using traditional agent pipeline (original implementation).
+        
+        More flexible for editing, testing, and general requests.
+        """
         from agents_app.api.models import Session
         session = Session.objects.get(id=session_id)
         self.planner_agent = planner_agent
 
         # -----------------------------------
-        # WORKSPACE
+        # WORKSPACE & MEMORY & TOOLS
         # -----------------------------------
         self.session_workspace = self._ensure_session_workspace(session.id)
-
-        # -----------------------------------
-        # TOOL SETUP
-        # -----------------------------------
-        tool_log = ToolExecutionLog()
-
-        planner_agent.tools = [
-            AuditedTool(
-                read_file.ReadFileTool(base_path=self.session_workspace),
-                tool_log
-            ),
-            AuditedTool(
-                write_file.WriteFileTool(base_path=self.session_workspace),
-                tool_log
-            ),
-            AuditedTool(
-                delete_file.DeleteFileTool(base_path=self.session_workspace),
-                tool_log
-            ),
-            AuditedTool(
-                list_files.ListFilesTool(base_path=self.session_workspace),
-                tool_log
-            ),
-            AuditedTool(
-                diff_tool.DiffTool(base_path=self.session_workspace),
-                tool_log
-            ),
-        ]
+        memory = SessionMemory(session_id, self.session_workspace)
+        
+        # Create tool broker for this session
+        tool_broker = create_broker(
+            session_id=session_id,
+            workspace_path=self.session_workspace,
+            user_id=getattr(session, 'created_by_user_id', None),
+        )
+        
+        # Store broker in session for later access to audit logs
+        self.tool_broker = tool_broker
 
         # -----------------------------------
         # CONTEXT
@@ -220,6 +326,12 @@ class CopilotOrchestrator:
             json.dumps(context, indent=2, ensure_ascii=False),
             encoding="utf-8"
         )
+        
+        # Store metadata in memory
+        if hasattr(session, 'description'):
+            memory.set_metadata("project_description", session.description)
+        if hasattr(session, 'category'):
+            memory.set_metadata("project_category", session.category)
 
         # -----------------------------------
         # INTENT
@@ -236,12 +348,18 @@ class CopilotOrchestrator:
         ).strip()
 
         # -----------------------------------
-        # PLANNING
+        # PLANNING (with RAG)
         # -----------------------------------
+        # Retrieve RAG context based on user input
+        rag_context = memory.get_rag_context(user_input, top_k=3)
+        
         planner_output = planner_agent.run(
             f"""
             Context:
             {context_prompt}
+
+            RAG Retrieved Context:
+            {rag_context}
 
             Intent: {intent}
 
@@ -260,6 +378,13 @@ class CopilotOrchestrator:
         )
 
         planner_decision = json.loads(planner_output)
+        
+        # Record in memory for future context
+        memory.add_interaction(
+            user_input=user_input,
+            intent={"intent": intent},
+            planner_decision=planner_decision,
+        )
 
         # -----------------------------------
         # CREATE INTERACTION (EARLY)
@@ -303,20 +428,20 @@ class CopilotOrchestrator:
             tool_results = self.execute_tools(planner_decision)
 
         # -----------------------------------
-        # RESPONSE
+        # RESPONSE (with RAG)
         # -----------------------------------
         if intent in (
             Interaction.Intent.GENERATE,
             Interaction.Intent.MODIFY,
         ):
-            code = generator_agent.run(user_input)
+            code = generator_agent.run(f"{rag_context}\n\nUser request:\n{user_input}")
             review = reviewer_agent.run(code)
             final_result = {
                 "generated_code": code,
                 "review": review,
             }
         else:
-            final_result = response_agent.run(user_input)
+            final_result = response_agent.run(f"{rag_context}\n\nUser request:\n{user_input}")
 
         # -----------------------------------
         # FINAL PERSISTENCE
@@ -327,13 +452,20 @@ class CopilotOrchestrator:
         })
         interaction.save(update_fields=["llm_response"])
 
-        for tool in tool_log.executions:
+        # Persist broker audit log
+        for execution_record in tool_broker.get_execution_log():
             ToolExecution.objects.create(
                 interaction=interaction,
-                tool_name=tool["name"],
-                input_payload=tool["input"],
-                output_payload=tool["output"],
+                tool_name=execution_record.tool_name,
+                input_payload=execution_record.args,
+                output_payload=execution_record.result or {},
             )
+
+        # Update memory with final response
+        memory.add_interaction(
+            user_input=user_input,
+            response=final_result,
+        )
 
         return {
             "status": "completed",
@@ -342,4 +474,6 @@ class CopilotOrchestrator:
             "intent": intent,
             "tools": tool_results,
             "result": final_result,
+            "memory": memory.get_full_context(),
+            "audit": tool_broker.export_audit(),
         }

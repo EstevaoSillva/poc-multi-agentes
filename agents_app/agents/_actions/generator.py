@@ -1,10 +1,11 @@
-from agno.agent import Agent
+"""Action agents - Code generation."""
 
+from agno.agent import Agent
 from agents_app.llm.ollama_provider import get_llm
 
 generator_agent = Agent(
     name="CodeGenerator",
-    model=get_llm(),
+    model=get_llm("code"),
     instructions="""
     You are a senior backend engineer.
 

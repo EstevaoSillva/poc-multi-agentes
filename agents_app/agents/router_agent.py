@@ -4,7 +4,7 @@ from agents_app.llm.ollama_provider import get_llm
 
 router_agent = Agent(
     name="IntentRouter",
-    model=get_llm(),
+    model=get_llm("chat"),
     instructions="""
         You are an intent classifier.
         

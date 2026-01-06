@@ -1,5 +1,5 @@
 from pathlib import Path
-from agents_app.agents.test_agent import test_agent
+from agents_app.agents import test_agent
 from agents_app.utils import safe_json_parse
 
 

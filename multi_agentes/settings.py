@@ -41,6 +41,7 @@ ALLOWED_HOSTS = ['*']
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',  # Django Channels ASGI server (must be first)
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -82,6 +83,16 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'multi_agentes.wsgi.application'
+
+
+# Django Channels ASGI configuration
+ASGI_APPLICATION = 'multi_agentes.asgi.application'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    }
+}
 
 
 # Database
