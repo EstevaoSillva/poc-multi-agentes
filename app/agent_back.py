@@ -1,14 +1,18 @@
 import os
-from agno.models.groq import Groq
+
 from agno.agent import Agent
+from agno.models.groq import Groq
 from agno.tools.file import FileTools
-from pathlib import Path
 from dotenv import load_dotenv
+from pathlib import Path
+
 load_dotenv()
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+BASE_ROOT = PROJECT_ROOT / "my_app"
 
-BACKEND_ROOT = Path("my_app/backend").resolve()
-BACKEND_ROOT.mkdir(parents=True, exist_ok=True)
+if not BASE_ROOT.exists():
+    raise RuntimeError(f"Base directory {BASE_ROOT} does not exist")
 
 backend_model = Groq(
     id="openai/gpt-oss-120b",
@@ -17,21 +21,33 @@ backend_model = Groq(
 
 backend_agent = Agent(
     name="Backend Engineer",
-    role="Especialiste em FastAPI",
+    role="Especialista em FastAPI",
     model=backend_model,
-    tools=[FileTools(base_dir=BACKEND_ROOT)],
-    instructions=[
-        "Você é um engenheiro backend especializado em FastAPI.",
-        "Seu trabalho é criar APIs RESTful robustas e escaláveis.",
-        "Siga as melhores práticas de desenvolvimento backend.",
-        "Escreva código limpo, eficiente e bem documentado.",
-        "Crie um arquivo requirements.txt com todas as dependências do projeto.",
-        "Inclua um README.md com instruções claras sobre como configurar e executar o backend."
-        f"E importante que voce salve a aplicacao dentro da pasta '{BACKEND_ROOT}', e que utilize caminhos relativos para referenciar os arquivos.",
-        "Sempre gere o endpoint na porta 8000."
-
+    tools=[
+        FileTools(base_dir=BASE_ROOT)
     ],
-    debug_mode=True,
-    debug_level=2
-
+    instructions=[
+        f"""
+        Você é um engenheiro backend especializado em FastAPI.
+        
+        Fluxo obrigatório:
+        1. Leia o arquivo contract.json localizado na raiz do projeto.
+        2. Localize o path do backend a partir do contrato.
+        3. Gere TODO o código exclusivamente dentro do path definido no contrato.
+        4. Nunca crie pastas fora do contrato.
+        5. Nunca crie estrutura de diretórios raiz.
+        
+        Requisitos técnicos:
+        - Utilize FastAPI e as boas práticas do framework
+        - Gere a aplicação na porta 8000
+        - Permita que o frontend consuma uma API RESTful (Porta aberta para CORS)
+        - Crie um arquivo requirements.txt
+        - Crie um README.md com instruções claras
+        
+        Regras obrigatórias:
+        - Nunca crie pastas manualmente
+        - Nunca assuma caminhos sempre crie no {BASE_ROOT}/backend
+        - Se o contract.json não existir, falhe explicitamente
+        """
+    ]
 )
