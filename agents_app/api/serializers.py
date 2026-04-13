@@ -11,7 +11,7 @@ class SessionSerializer(serializers.ModelSerializer):
 
 
 class InteractionInputSerializer(serializers.Serializer):
-    user_prompt = serializers.CharField(
+    prompt = serializers.CharField(
         help_text="Comando ou solicitação para o agente Copilot."
     )
 

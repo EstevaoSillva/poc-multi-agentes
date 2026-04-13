@@ -270,9 +270,13 @@ class StreamingOrchestratorWrapper:
                 },
             )
 
-            # Run orchestrator (sync call wrapped in async)
-            # Note: In production, you'd want true async agents
-            result = self.orchestrator.run(session_id, user_input, use_teams)
+            # Run orchestrator in thread to avoid blocking event loop
+            result = await asyncio.to_thread(
+                self.orchestrator.run,
+                session_id,
+                user_input,
+                use_teams,
+            )
 
             # Emit final result
             await self.stream.emit_response_complete(result)

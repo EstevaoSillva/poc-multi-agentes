@@ -16,22 +16,11 @@ from agents_app.api.models import (
 )
 from agents_app.context.builder import build_context
 from agents_app.context.prompt_adapter import context_to_prompt
-from agents_app.services.auto_fix_service import AutoFixService
-from agents_app.services.editor_service import EditorService
-from agents_app.services.intent_service import IntentService
 from agents_app.services.project_generator import ProjectGeneratorService
-from agents_app.services.test_service import TestService
 from agents_app.services.session_memory import SessionMemory
 from agents_app.tools.tool_broker import create_broker
 from agents_app.tools.tool_registration import register_default_tools
-from agents_app.tools import (
-    read_file,
-    write_file,
-    delete_file,
-    list_files,
-    diff_tool,
-)
-from agents_app.tools.audited_tool import AuditedTool
+from agents_app.utils import extract_text_from_run, safe_json_parse
 
 # ---------------------------------------
 # POLICY
@@ -62,7 +51,8 @@ class CopilotOrchestrator:
         self.workspace_root = Path(workspace_path)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.planner_agent = planner_agent
-        self.intent_service = IntentService()
+        self.session_workspace = None
+        self.tool_broker = None
         
         # Initialize tool registry
         register_default_tools()
@@ -121,26 +111,46 @@ class CopilotOrchestrator:
     # INTENT HANDLING
     # -----------------------------------
     def handle(self, user_input: str):
-        intent_data = self.intent_service.resolve(user_input)
-        intent = intent_data["intent"]
-
-        if intent == "create_backend":
-            return ProjectGeneratorService(...).generate_minimal_fastapi_project(user_input)
-
-        elif intent == "edit_project":
-            return EditorService(...).edit(user_input)
-
-        elif intent == "test_project":
-            return TestService(...).run(user_input)
-
-        elif intent == "auto_fix_project":
-            return AutoFixService(...).run(user_input)
-
         return {
-            "status": "ignored",
-            "reason": "Intent not actionable"
+            "status": "unsupported",
+            "reason": "Use run(session_id, user_input) for actionable orchestration.",
         }
 
+    def _extract_router_intent(self, router_output) -> str:
+        raw_text = extract_text_from_run(router_output)
+        try:
+            data = safe_json_parse(raw_text)
+            return str(data.get("intent", "unknown")).strip().lower()
+        except ValueError:
+            return raw_text.strip().lower()
+
+    def _normalize_intent(self, raw_intent: str) -> str:
+        mapping = {
+            "create_backend": Interaction.Intent.GENERATE,
+            "create_frontend": Interaction.Intent.GENERATE,
+            "edit_project": Interaction.Intent.MODIFY,
+            "test_project": Interaction.Intent.REVIEW,
+            "auto_fix_project": Interaction.Intent.MODIFY,
+            "read": Interaction.Intent.READ,
+            "generate": Interaction.Intent.GENERATE,
+            "review": Interaction.Intent.REVIEW,
+            "modify": Interaction.Intent.MODIFY,
+            "delete": Interaction.Intent.DELETE,
+            "unknown": Interaction.Intent.UNKNOWN,
+        }
+        return mapping.get((raw_intent or "").strip().lower(), Interaction.Intent.UNKNOWN)
+
+    def _ensure_tool_broker(self, session_id: int, user_id=None):
+        if self.session_workspace is None:
+            self.session_workspace = self._ensure_session_workspace(session_id)
+
+        if self.tool_broker is None or self.tool_broker.session_id != session_id:
+            self.tool_broker = create_broker(
+                session_id=session_id,
+                workspace_path=self.session_workspace,
+                user_id=user_id,
+            )
+        return self.tool_broker
 
     # -----------------------------------
     # SECURITY POLICY
@@ -161,7 +171,10 @@ class CopilotOrchestrator:
     # -----------------------------------
     # TOOL EXECUTION
     # -----------------------------------
-    def execute_tools(self, planner_decision: dict):
+    def execute_tools(self, planner_decision: dict, *, approved: bool = False, user_intent: str | None = None):
+        if self.tool_broker is None:
+            raise RuntimeError("Tool broker is not initialized for this session")
+
         results = []
 
         for call in planner_decision.get("tools", []):
@@ -169,19 +182,17 @@ class CopilotOrchestrator:
             args = call.get("args", {})
 
             self.check_policy(self.session_workspace, tool_name, args)
-
-            tool = next(
-                (t for t in planner_agent.tools if t.name == tool_name),
-                None
+            output, record = self.tool_broker.execute(
+                tool_name=tool_name,
+                args=args,
+                user_intent=user_intent,
+                approved=approved,
             )
-
-            if not tool:
-                raise ValueError(f"Tool '{tool_name}' não registrada")
-
-            output = tool.run(**args)
 
             results.append({
                 "tool": tool_name,
+                "status": record.status,
+                "error": record.error_message,
                 "output": output,
             })
 
@@ -264,19 +275,11 @@ class CopilotOrchestrator:
         Returns:
             dict with execution results
         """
-        from agents_app.api.models import Session
-        
         # Detect intent first
         intent_output = intent_router_agent.run(
             f"{user_input}\n\nClassify the intent (create_backend, create_frontend, edit_project, test_project, unknown)"
         )
-        
-        # Extract intent from response
-        try:
-            intent_data = json.loads(intent_output) if isinstance(intent_output, str) and intent_output.startswith("{") else {"intent": intent_output.strip()}
-            detected_intent = intent_data.get("intent", "unknown")
-        except:
-            detected_intent = "unknown"
+        detected_intent = self._extract_router_intent(intent_output)
         
         # Auto-select mode if not specified
         if use_teams is None:
@@ -305,15 +308,10 @@ class CopilotOrchestrator:
         self.session_workspace = self._ensure_session_workspace(session.id)
         memory = SessionMemory(session_id, self.session_workspace)
         
-        # Create tool broker for this session
-        tool_broker = create_broker(
+        tool_broker = self._ensure_tool_broker(
             session_id=session_id,
-            workspace_path=self.session_workspace,
-            user_id=getattr(session, 'created_by_user_id', None),
+            user_id=getattr(session, "created_by_user_id", None),
         )
-        
-        # Store broker in session for later access to audit logs
-        self.tool_broker = tool_broker
 
         # -----------------------------------
         # CONTEXT
@@ -336,16 +334,18 @@ class CopilotOrchestrator:
         # -----------------------------------
         # INTENT
         # -----------------------------------
-        intent = intent_router_agent.run(
+        raw_intent_output = intent_router_agent.run(
             f"""
             {context_prompt}
 
             User input:
             {user_input}
 
-            Return only the intent.
+            Return STRICT JSON with intent/confidence/reason.
             """
-        ).strip()
+        )
+        raw_intent = self._extract_router_intent(raw_intent_output)
+        intent = self._normalize_intent(raw_intent)
 
         # -----------------------------------
         # PLANNING (with RAG)
@@ -377,12 +377,13 @@ class CopilotOrchestrator:
             """
         )
 
-        planner_decision = json.loads(planner_output)
+        planner_decision_raw = extract_text_from_run(planner_output)
+        planner_decision = safe_json_parse(planner_decision_raw)
         
         # Record in memory for future context
         memory.add_interaction(
             user_input=user_input,
-            intent={"intent": intent},
+            intent={"raw": raw_intent, "normalized": intent},
             planner_decision=planner_decision,
         )
 
@@ -393,7 +394,7 @@ class CopilotOrchestrator:
             session=session,
             user_prompt=user_input,
             intent=intent,
-            planner_decision=planner_output,
+            planner_decision=planner_decision,
             llm_response="IN_PROGRESS",
         )
 
@@ -424,8 +425,11 @@ class CopilotOrchestrator:
         # EXECUTION
         # -----------------------------------
         tool_results = []
-        if planner_decision["strategy"] == "execute_tools":
-            tool_results = self.execute_tools(planner_decision)
+        if planner_decision.get("strategy") == "execute_tools":
+            tool_results = self.execute_tools(
+                planner_decision,
+                user_intent=raw_intent,
+            )
 
         # -----------------------------------
         # RESPONSE (with RAG)
@@ -434,14 +438,18 @@ class CopilotOrchestrator:
             Interaction.Intent.GENERATE,
             Interaction.Intent.MODIFY,
         ):
-            code = generator_agent.run(f"{rag_context}\n\nUser request:\n{user_input}")
-            review = reviewer_agent.run(code)
+            code = extract_text_from_run(
+                generator_agent.run(f"{rag_context}\n\nUser request:\n{user_input}")
+            )
+            review = extract_text_from_run(reviewer_agent.run(code))
             final_result = {
                 "generated_code": code,
                 "review": review,
             }
         else:
-            final_result = response_agent.run(f"{rag_context}\n\nUser request:\n{user_input}")
+            final_result = extract_text_from_run(
+                response_agent.run(f"{rag_context}\n\nUser request:\n{user_input}")
+            )
 
         # -----------------------------------
         # FINAL PERSISTENCE

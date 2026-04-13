@@ -41,12 +41,7 @@ class SessionViewSet(viewsets.ModelViewSet):
     def interact(self, request, pk=None):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user_input = request.data.get("prompt")
-        if not user_input:
-            return Response(
-                {"error": "O campo 'prompt' é obrigatório no corpo da requisição."},
-                status=400
-            )
+        user_input = serializer.validated_data["prompt"]
 
         orchestrator = CopilotOrchestrator(
             workspace_path=settings.WORKSPACE_PATH
@@ -82,17 +77,35 @@ class PendingActionViewSet(viewsets.ReadOnlyModelViewSet):
             workspace_path=settings.WORKSPACE_PATH
         )
 
-        result = orchestrator.execute_tools({
-            "tools": [{
-                "name": pending.tool_name,
-                "args": pending.tool_input
-            }]
-        })
+        orchestrator.session_workspace = orchestrator._ensure_session_workspace(pending.session.id)
+        orchestrator._ensure_tool_broker(
+            session_id=pending.session.id,
+            user_id=getattr(pending.session, "created_by_user_id", None),
+        )
+        result = orchestrator.execute_tools(
+            {
+                "tools": [{
+                    "name": pending.tool_name,
+                    "args": pending.tool_input
+                }]
+            },
+            approved=True,
+        )
 
+        for execution_record in orchestrator.tool_broker.get_execution_log():
+            if pending.interaction_id:
+                ToolExecution.objects.create(
+                    interaction=pending.interaction,
+                    tool_name=execution_record.tool_name,
+                    input_payload=execution_record.args,
+                    output_payload=execution_record.result or {},
+                )
+
+        has_error = any(item.get("status") != "success" for item in result)
         pending.delete()
 
         return Response({
-            "status": "executed",
+            "status": "executed" if not has_error else "execution_error",
             "result": result
         })
 
@@ -225,26 +238,49 @@ class SessionStartAPIView(APIView):
         plan = safe_json_parse(raw)
 
         # Workspace
-        base_path = Path("workspace") / f"session_{session.id}"
+        base_path = Path(settings.WORKSPACE_PATH) / "sessions" / f"session_{session.id}"
         base_path.mkdir(parents=True, exist_ok=True)
 
         progress = []
 
-        for root, dirs in plan["structure"].items():
-            root_path = base_path / root
-            root_path.mkdir(exist_ok=True)
-            progress.append(f"Created {root}/")
+        if "structure" in plan and isinstance(plan["structure"], dict):
+            for root, dirs in plan["structure"].items():
+                root_path = base_path / root
+                root_path.mkdir(exist_ok=True)
+                progress.append(f"Created {root}/")
 
-            for d in dirs:
-                (root_path / d).mkdir(exist_ok=True)
-                progress.append(f"Created {root}/{d}/")
+                for d in dirs:
+                    (root_path / d).mkdir(exist_ok=True)
+                    progress.append(f"Created {root}/{d}/")
+        elif "execution_plan" in plan and isinstance(plan["execution_plan"], list):
+            created_dirs = set()
+            for step in plan["execution_plan"]:
+                for output_path in step.get("outputs", []):
+                    output = Path(output_path)
+                    parent = output.parent if output.suffix else output
+                    if not str(parent) or str(parent) == ".":
+                        continue
+                    target = base_path / parent
+                    if target not in created_dirs:
+                        target.mkdir(parents=True, exist_ok=True)
+                        created_dirs.add(target)
+                        progress.append(f"Created {target.relative_to(base_path)}/")
+        else:
+            return Response(
+                {"error": "Planner returned unsupported schema"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
         return Response(
             {
                 "message": "Iniciando as tasks...",
                 "progress": progress,
                 "project_path": str(base_path.resolve()),
-                "next_steps": plan["next_steps"]
+                "next_steps": plan.get("next_steps") or [
+                    step.get("title")
+                    for step in plan.get("execution_plan", [])
+                    if isinstance(step, dict) and step.get("title")
+                ]
             },
             status=status.HTTP_200_OK
         )

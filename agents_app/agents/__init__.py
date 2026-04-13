@@ -1,8 +1,8 @@
 """Agents module - All agents for the multi-agent orchestration system.
 
 Internal Structure (underscore prefix = internal/private):
-- _core: Core pipeline agents (intent routing, planning, response)
-- _actions: Action agents (generation, editing, review, testing)
+- core: Core pipeline agents (intent routing, planning, response)
+- actions: Action agents (generation, editing, review, testing)
 - developer: Public - Specialized agents for backend/frontend development
 - teams: Public - Team orchestration (Backend Team, Frontend Team, Product Team)
 
@@ -11,16 +11,16 @@ Public API (backward compatible):
 - Teams are available via build_* functions
 """
 
-# Core agents from _core module (internal)
-from agents_app.agents._core.intent_router import intent_router_agent
-from agents_app.agents._core.planner import planner_agent
-from agents_app.agents._core.response import response_agent
+# Core agents from core module (internal)
+from agents_app.agents.core.intent_router import intent_router_agent
+from agents_app.agents.core.planner import planner_agent
+from agents_app.agents.core.response import response_agent
 
-# Action agents from _actions module (internal)
-from agents_app.agents._actions.generator import generator_agent
-from agents_app.agents._actions.editor import editor_agent
-from agents_app.agents._actions.reviewer import reviewer_agent
-from agents_app.agents._actions.test import test_agent
+# Action agents from actions module (internal)
+from agents_app.agents.actions.generator import generator_agent
+from agents_app.agents.actions.editor_agent import editor_agent
+from agents_app.agents.actions.reviewer import reviewer_agent
+from agents_app.agents.actions.test import test_agent
 
 # Special agents (kept at root for backward compatibility)
 from agents_app.agents.router_agent import router_agent

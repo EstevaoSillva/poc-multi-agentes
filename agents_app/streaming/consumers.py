@@ -10,8 +10,8 @@ Handles:
 
 import json
 import asyncio
+from django.conf import settings
 from channels.generic.websocket import AsyncWebsocketConsumer
-from channels.db import database_sync_to_async
 
 from agents_app.orchestrator import CopilotOrchestrator
 from agents_app.streaming.stream_service import (
@@ -43,7 +43,7 @@ class StreamingConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         """Accept WebSocket connection."""
-        self.session_id = None
+        self.session_id = self.scope.get("url_route", {}).get("kwargs", {}).get("session_id")
         self.stream_service = None
         self.orchestrator = None
         self.heartbeat_task = None
@@ -89,12 +89,16 @@ class StreamingConsumer(AsyncWebsocketConsumer):
         Args:
             data: {"session_id": int, "user_input": str, "use_teams": bool?}
         """
-        session_id = data.get("session_id")
+        payload_session_id = data.get("session_id")
+        session_id = payload_session_id or self.session_id
         user_input = data.get("user_input")
         use_teams = data.get("use_teams")
 
         if not session_id or not user_input:
             await self.send_error("Missing session_id or user_input")
+            return
+        if payload_session_id and self.session_id and int(payload_session_id) != int(self.session_id):
+            await self.send_error("session_id in payload does not match route session_id")
             return
 
         self.session_id = session_id
@@ -110,7 +114,7 @@ class StreamingConsumer(AsyncWebsocketConsumer):
             self.heartbeat_task = asyncio.create_task(self.heartbeat_loop())
 
             # Initialize orchestrator from workspace
-            workspace_path = f"/tmp/poc-agentes/workspace"  # or from settings
+            workspace_path = settings.WORKSPACE_PATH
             self.orchestrator = CopilotOrchestrator(workspace_path)
 
             # Create streaming wrapper
@@ -120,8 +124,7 @@ class StreamingConsumer(AsyncWebsocketConsumer):
             )
 
             # Run with streaming
-            result = await asyncio.to_thread(
-                wrapper.orchestrator.run,
+            result = await wrapper.run_with_streaming(
                 session_id,
                 user_input,
                 use_teams,

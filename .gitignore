@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Django / local runtime
+db.sqlite3
+media/
+staticfiles/
+
+# Project local generated artifacts
+workspace/
+agents_app/state/project_state.json
+
+# IDEs / editors
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
