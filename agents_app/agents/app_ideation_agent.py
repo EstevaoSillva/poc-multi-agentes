@@ -1,8 +1,6 @@
 from agno.agent import Agent
-from agno.tools.duckduckgo import DuckDuckGoTools
 
 from agents_app.llm.ollama_provider import get_llm
-
 
 app_ideation_agent = Agent(
     name="AppIdeationAgent",

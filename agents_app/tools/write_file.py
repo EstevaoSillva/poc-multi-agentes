@@ -1,7 +1,7 @@
-from agno.tools import Tool
+from agno.tools import Toolkit
 from pathlib import Path
 
-class WriteFileTool(Tool):
+class WriteFileTool(Toolkit):
     name = "write_file"
 
     def run(self, path: str, content: str):

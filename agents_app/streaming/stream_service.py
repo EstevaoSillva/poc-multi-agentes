@@ -245,7 +245,6 @@ class StreamingOrchestratorWrapper:
         self,
         session_id: int,
         user_input: str,
-        use_teams: Optional[bool] = None,
     ) -> Dict:
         """
         Execute orchestrator with streaming updates.
@@ -255,7 +254,6 @@ class StreamingOrchestratorWrapper:
         Args:
             session_id: Session ID
             user_input: User request
-            use_teams: Force team mode
 
         Returns:
             Orchestrator result dict
@@ -275,7 +273,6 @@ class StreamingOrchestratorWrapper:
                 self.orchestrator.run,
                 session_id,
                 user_input,
-                use_teams,
             )
 
             # Emit final result

@@ -30,13 +30,12 @@ class StreamingClient:
             print(f"✗ Connection failed: {e}")
             return False
 
-    async def send_run(self, session_id: int, user_input: str, use_teams: bool = False):
+    async def send_run(self, session_id: int, user_input: str):
         """Send run request."""
         payload = {
             "action": "run",
             "session_id": session_id,
             "user_input": user_input,
-            "use_teams": use_teams,
         }
         await self.websocket.send(json.dumps(payload))
         print(f"→ Sent: {payload}")
@@ -109,7 +108,7 @@ class StreamingClient:
 
         try:
             # Send run request
-            await self.send_run(session_id, user_input, use_teams=False)
+            await self.send_run(session_id, user_input)
 
             # Listen for events
             receive_task = asyncio.create_task(self.receive_events())

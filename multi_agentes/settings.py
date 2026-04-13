@@ -14,9 +14,15 @@ import os
 from os.path import exists
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
-from agents_app.utils import str_to_bool
+
+def str_to_bool(value: str) -> bool:
+    return str(value).strip().lower() in ('1', 'yes', 'true', 't')
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -155,6 +161,19 @@ STATIC_URL = 'static/'
 
 # Caminho para o diretório de workspace dos agentes
 WORKSPACE_PATH = os.environ.get('WORKSPACE_PATH', os.path.join(BASE_DIR, 'workspace'))
+
+_default_paia_root_local = os.path.join(BASE_DIR, "paia")
+_default_paia_root_external = os.path.abspath(os.path.join(BASE_DIR, "..", "paia"))
+_default_paia_root = _default_paia_root_local if os.path.exists(_default_paia_root_local) else _default_paia_root_external
+_default_knowledge_sources = [
+    os.path.join(_default_paia_root, "docs"),
+    os.path.join(_default_paia_root, "skills"),
+    os.path.join(_default_paia_root, "specs"),
+]
+KNOWLEDGE_SOURCES = [
+    p.strip() for p in os.environ.get("KNOWLEDGE_SOURCES", ",".join(_default_knowledge_sources)).split(",") if p.strip()
+]
+KNOWLEDGE_AUTO_INDEX = str_to_bool(os.environ.get("KNOWLEDGE_AUTO_INDEX", "True"))
 
 REST_FRAMEWORK = {
     # Configuração de Paginação Padrão

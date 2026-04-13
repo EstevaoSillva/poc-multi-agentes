@@ -8,8 +8,11 @@ from typing import Optional
 from pathlib import Path
 import json
 
+from django.conf import settings
+
 from agents_app.api.models import Interaction
 from agents_app.services.embeddings_service import EmbeddingsService
+from agents_app.services.knowledge_ingestion_service import KnowledgeIngestionService
 
 
 class SessionMemory:
@@ -31,8 +34,19 @@ class SessionMemory:
         
         # Initialize embeddings service for RAG
         self.embeddings = EmbeddingsService(session_id, workspace_path)
+        self.knowledge_service = KnowledgeIngestionService(
+            session_id=session_id,
+            workspace_path=workspace_path,
+            embeddings_service=self.embeddings,
+            source_paths=getattr(settings, "KNOWLEDGE_SOURCES", []),
+        )
         
         self._load_from_disk()
+        if getattr(settings, "KNOWLEDGE_AUTO_INDEX", False):
+            try:
+                self.knowledge_service.reindex(force=False)
+            except Exception:
+                pass
 
     def _load_from_disk(self) -> dict:
         """Load memory from workspace disk if exists."""
@@ -174,6 +188,7 @@ class SessionMemory:
             "metadata": self._data["metadata"],
             "embeddings_index": self._data["embeddings_index"],
             "embeddings_stats": self.embeddings.get_stats(),
+            "knowledge_stats": self.knowledge_service.stats(),
             "session_id": self.session_id,
         }
 
@@ -199,3 +214,9 @@ class SessionMemory:
     def to_dict(self) -> dict:
         """Export full memory as dict."""
         return self._data
+
+    def reindex_knowledge(self, force: bool = False) -> dict:
+        return self.knowledge_service.reindex(force=force)
+
+    def get_knowledge_stats(self) -> dict:
+        return self.knowledge_service.stats()

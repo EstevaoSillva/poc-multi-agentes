@@ -1,8 +1,8 @@
-from agno.tools import Tool
+from agno.tools import Toolkit
 from pathlib import Path
 
 
-class ListFilesTool(Tool):
+class ListFilesTool(Toolkit):
     name = "list_files"
 
     def run(self, base_path: str):

@@ -1,7 +1,7 @@
 import difflib
-from agno.tools import Tool
+from agno.tools import Toolkit
 
-class DiffTool(Tool):
+class DiffTool(Toolkit):
     name = "diff_tool"
 
     def run(self, old: str, new: str):

@@ -2,12 +2,12 @@ import json
 from pathlib import Path
 
 from agents_app.agents import (
+    execution_guard_agent,
     generator_agent,
     intent_router_agent,
     planner_agent,
     response_agent,
     reviewer_agent,
-    build_product_team,
 )
 from agents_app.api.models import (
     Interaction,
@@ -18,8 +18,10 @@ from agents_app.context.builder import build_context
 from agents_app.context.prompt_adapter import context_to_prompt
 from agents_app.services.project_generator import ProjectGeneratorService
 from agents_app.services.session_memory import SessionMemory
+from agents_app.policies.execution_guard import validate_candidate_paths
 from agents_app.tools.tool_broker import create_broker
 from agents_app.tools.tool_registration import register_default_tools
+from agents_app.contracts import parse_intent_decision, parse_plan_decision
 from agents_app.utils import extract_text_from_run, safe_json_parse
 
 # ---------------------------------------
@@ -119,8 +121,8 @@ class CopilotOrchestrator:
     def _extract_router_intent(self, router_output) -> str:
         raw_text = extract_text_from_run(router_output)
         try:
-            data = safe_json_parse(raw_text)
-            return str(data.get("intent", "unknown")).strip().lower()
+            decision = parse_intent_decision(safe_json_parse(raw_text))
+            return decision.intent
         except ValueError:
             return raw_text.strip().lower()
 
@@ -171,6 +173,45 @@ class CopilotOrchestrator:
     # -----------------------------------
     # TOOL EXECUTION
     # -----------------------------------
+    def _guard_candidate_paths(self, tool_name: str, args: dict, *, allowed_paths: list[str] | None = None):
+        candidate_paths = []
+        for key in ("path", "base_path"):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                candidate_paths.append(value.strip())
+
+        validate_candidate_paths(
+            workspace_root=self.session_workspace,
+            candidate_paths=candidate_paths,
+            allowed_paths=allowed_paths,
+        )
+
+        # LLM guard is advisory; deterministic checks above are authoritative.
+        try:
+            guard_raw = extract_text_from_run(
+                execution_guard_agent.run(
+                    json.dumps(
+                        {
+                            "workspace_root": str(self.session_workspace),
+                            "operation_type": tool_name,
+                            "allowed_paths": allowed_paths or [],
+                            "candidate_paths": candidate_paths,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            )
+            guard_decision = safe_json_parse(guard_raw)
+            allow = bool(guard_decision.get("allow", True))
+            violations = guard_decision.get("violations", []) or []
+            if not allow:
+                raise PermissionError(
+                    f"ExecutionGuard bloqueou '{tool_name}': {', '.join(map(str, violations))}"
+                )
+        except ValueError:
+            # Ignore malformed guard output; deterministic checks still protect execution.
+            pass
+
     def execute_tools(self, planner_decision: dict, *, approved: bool = False, user_intent: str | None = None):
         if self.tool_broker is None:
             raise RuntimeError("Tool broker is not initialized for this session")
@@ -181,7 +222,7 @@ class CopilotOrchestrator:
             tool_name = call["name"]
             args = call.get("args", {})
 
-            self.check_policy(self.session_workspace, tool_name, args)
+            self._guard_candidate_paths(tool_name, args)
             output, record = self.tool_broker.execute(
                 tool_name=tool_name,
                 args=args,
@@ -199,97 +240,20 @@ class CopilotOrchestrator:
         return results
 
     # -----------------------------------
-    # RUN WITH TEAMS (SPECIALIZED MODE)
+    # MAIN ENTRYPOINT (SINGLE PIPELINE)
     # -----------------------------------
-    def run_with_teams(self, session_id: int, user_input: str) -> dict:
+    def run(self, session_id: int, user_input: str) -> dict:
         """
-        Execute using specialized teams for coordinated development.
-        
-        This mode uses Product Team which orchestrates Backend and Frontend teams,
-        each with specialized agents for infrastructure, development, and testing.
+        Execute orchestration using a single pipeline.
         
         Args:
             session_id: Session ID
             user_input: User request
-        
-        Returns:
-            dict with execution results from teams
-        """
-        from agents_app.api.models import Session
-        
-        session = Session.objects.get(id=session_id)
-        workspace = self._ensure_session_workspace(session.id)
-        memory = SessionMemory(session_id, workspace)
-        
-        # Retrieve RAG context for this request
-        rag_context = memory.get_rag_context(user_input, top_k=3)
-        
-        # Enhance user input with RAG context
-        enhanced_input = f"{rag_context}\n\n{user_input}"
-        
-        # Build product team with session workspace
-        product_team = build_product_team(session_workspace=workspace)
-        
-        # Execute team with RAG-enhanced input
-        try:
-            result = product_team.run(enhanced_input)
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e),
-                "mode": "teams",
-                "workspace": str(workspace),
-            }
-        
-        # Record in memory
-        memory.add_interaction(
-            user_input=user_input,
-            response=result,
-        )
-        return {
-            "status": "success",
-            "mode": "teams",
-            "session_id": session.id,
-            "workspace": str(workspace),
-            "result": result,
-            "memory": memory.get_full_context(),
-            "audit": memory.embeddings.get_stats(),
-        }
-    
-    # -----------------------------------
-    # MAIN ENTRYPOINT (HYBRID MODE)
-    # -----------------------------------
-    def run(self, session_id: int, user_input: str, use_teams: bool = None) -> dict:
-        """
-        Execute orchestration with intent-based selection (Opção B).
-        
-        If use_teams is not specified, automatically selects based on intent:
-        - CREATE intents → use teams (specialized)
-        - Other intents → use agents (flexible)
-        
-        Args:
-            session_id: Session ID
-            user_input: User request
-            use_teams: Force use of teams (None = auto-select)
         
         Returns:
             dict with execution results
         """
-        # Detect intent first
-        intent_output = intent_router_agent.run(
-            f"{user_input}\n\nClassify the intent (create_backend, create_frontend, edit_project, test_project, unknown)"
-        )
-        detected_intent = self._extract_router_intent(intent_output)
-        
-        # Auto-select mode if not specified
-        if use_teams is None:
-            use_teams = detected_intent in ["create_backend", "create_frontend"]
-        
-        # Use teams for creation intents
-        if use_teams:
-            return self.run_with_teams(session_id, user_input)
-        
-        # Otherwise use traditional agent pipeline
+        # Always use the single agent pipeline.
         return self.run_with_agents(session_id, user_input)
     
     def run_with_agents(self, session_id: int, user_input: str) -> dict:
@@ -378,7 +342,7 @@ class CopilotOrchestrator:
         )
 
         planner_decision_raw = extract_text_from_run(planner_output)
-        planner_decision = safe_json_parse(planner_decision_raw)
+        planner_decision = parse_plan_decision(safe_json_parse(planner_decision_raw)).__dict__
         
         # Record in memory for future context
         memory.add_interaction(

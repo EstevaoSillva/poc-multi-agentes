@@ -1,6 +1,6 @@
-from agno.tools import Tool
+from agno.tools import Toolkit
 
-class AuditedTool(Tool):
+class AuditedTool(Toolkit):
     def __init__(self, tool, logger):
         self._tool = tool
         self._logger = logger

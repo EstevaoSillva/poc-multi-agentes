@@ -1,7 +1,7 @@
 from pathlib import Path
-from agno.tools import Tool
+from agno.tools import Toolkit
 
-class DeleteFileTool(Tool):
+class DeleteFileTool(Toolkit):
     name = "delete_file"
 
     def run(self, path: str):

@@ -29,8 +29,7 @@ class StreamingConsumer(AsyncWebsocketConsumer):
     {
         "action": "run" | "heartbeat" | "cancel",
         "session_id": <int>,
-        "user_input": "<string>",
-        "use_teams": <bool> (optional)
+        "user_input": "<string>"
     }
 
     Events sent to client:
@@ -87,12 +86,11 @@ class StreamingConsumer(AsyncWebsocketConsumer):
         Handle 'run' action - execute orchestrator with streaming.
 
         Args:
-            data: {"session_id": int, "user_input": str, "use_teams": bool?}
+            data: {"session_id": int, "user_input": str}
         """
         payload_session_id = data.get("session_id")
         session_id = payload_session_id or self.session_id
         user_input = data.get("user_input")
-        use_teams = data.get("use_teams")
 
         if not session_id or not user_input:
             await self.send_error("Missing session_id or user_input")
@@ -127,7 +125,6 @@ class StreamingConsumer(AsyncWebsocketConsumer):
             result = await wrapper.run_with_streaming(
                 session_id,
                 user_input,
-                use_teams,
             )
 
             # Send final result

@@ -2,7 +2,12 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
 from agents_app.api import views
-from agents_app.api.views import SessionStartAPIView, CopilotAPIView
+from agents_app.api.views import (
+    SessionStartAPIView,
+    CopilotAPIView,
+    SessionKnowledgeReindexAPIView,
+    SessionKnowledgeStatsAPIView,
+)
 
 router = DefaultRouter()
 router.register(r'sessions', views.SessionViewSet)
@@ -15,5 +20,7 @@ urlpatterns = [
     path("ideation/", views.IdeationAPIView.as_view(), name="ideation"),
     path('copilot/start/', views.CopilotStartAPIView.as_view(), name='copilot-start'),
     path("sessions/<int:session_id>/start/", SessionStartAPIView.as_view()),
+    path("sessions/<int:session_id>/knowledge/reindex/", SessionKnowledgeReindexAPIView.as_view()),
+    path("sessions/<int:session_id>/knowledge/stats/", SessionKnowledgeStatsAPIView.as_view()),
     path("copilot/", CopilotAPIView.as_view()),
 ]

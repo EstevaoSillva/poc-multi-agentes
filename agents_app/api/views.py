@@ -18,7 +18,9 @@ from agents_app.api.serializers import (
     InteractionInputSerializer
 )
 from agents_app.orchestrator import CopilotOrchestrator
-from agents_app.utils import safe_json_parse, extract_text_from_run
+from agents_app.services.project_workflow_service import ProjectWorkflowService
+from agents_app.services.session_memory import SessionMemory
+from agents_app.utils import safe_json_parse, extract_text_from_run, str_to_bool
 
 User = get_user_model()
 
@@ -42,17 +44,149 @@ class SessionViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user_input = serializer.validated_data["prompt"]
+        session = self.get_object()
 
-        orchestrator = CopilotOrchestrator(
-            workspace_path=settings.WORKSPACE_PATH
+        workflow = ProjectWorkflowService(session)
+        workflow_status = workflow.get_status()
+        state = workflow_status.get("workflow_state")
+
+        if workflow_status.get("status") == "not_started":
+            return Response(
+                workflow.start_workflow(project_name=session.title, idea_text=user_input),
+                status=status.HTTP_200_OK,
+            )
+
+        if state == "drafting_md":
+            return Response(
+                workflow.update_workflow_markdown(user_input=user_input),
+                status=status.HTTP_200_OK,
+            )
+
+        if state == "waiting_implementation_confirmation":
+            lowered = user_input.strip().lower()
+            if lowered in {"sim", "s", "yes", "y", "true", "1"}:
+                result = workflow.confirm_implementation(confirm=True)
+                return Response(result, status=status.HTTP_200_OK)
+            if lowered in {"nao", "não", "n", "no", "false", "0"}:
+                result = workflow.confirm_implementation(confirm=False)
+                return Response(result, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "status": "awaiting_confirmation",
+                    "message": "Responda 'sim' para implementar agora ou 'não' para continuar refinando o markdown.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        if state == "implementing":
+            result = workflow.propose_next_step()
+            return Response(result, status=status.HTTP_200_OK)
+
+        if state == "completed":
+            return Response(
+                {
+                    "status": "completed",
+                    "message": "Workflow concluído.",
+                    "workflow": workflow_status,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        return Response(workflow_status, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"])
+    def workflow_start(self, request, pk=None):
+        session = self.get_object()
+        project_name = request.data.get("project_name") or session.title
+        idea_text = request.data.get("idea") or request.data.get("prompt")
+        if not idea_text:
+            return Response({"error": "idea or prompt is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            service = ProjectWorkflowService(session)
+            result = service.start_workflow(project_name=project_name, idea_text=idea_text)
+            return Response(result, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"])
+    def workflow_update_md(self, request, pk=None):
+        session = self.get_object()
+        user_input = request.data.get("idea_update") or request.data.get("prompt") or ""
+        try:
+            service = ProjectWorkflowService(session)
+            result = service.update_workflow_markdown(user_input=user_input)
+            return Response(result, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"])
+    def workflow_finalize_md(self, request, pk=None):
+        session = self.get_object()
+        try:
+            service = ProjectWorkflowService(session)
+            result = service.finalize_markdown()
+            return Response(result, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"])
+    def workflow_confirm_implementation(self, request, pk=None):
+        session = self.get_object()
+        confirm_value = request.data.get("confirm", False)
+        confirm = confirm_value if isinstance(confirm_value, bool) else str_to_bool(str(confirm_value))
+        try:
+            service = ProjectWorkflowService(session)
+            result = service.confirm_implementation(confirm=confirm)
+            return Response(result, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"])
+    def workflow_next_step(self, request, pk=None):
+        session = self.get_object()
+        try:
+            service = ProjectWorkflowService(session)
+            result = service.propose_next_step()
+            return Response(result, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"])
+    def workflow_confirm_commit(self, request, pk=None):
+        session = self.get_object()
+        feature_id = request.data.get("feature_id")
+        step_id = request.data.get("step_id")
+        commit_ref = request.data.get("commit_ref", "")
+        if not feature_id or not step_id:
+            return Response(
+                {"error": "feature_id and step_id are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            service = ProjectWorkflowService(session)
+            result = service.confirm_step_commit(feature_id=feature_id, step_id=step_id, commit_ref=commit_ref)
+            return Response(result, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["get"])
+    def workflow_status(self, request, pk=None):
+        session = self.get_object()
+        service = ProjectWorkflowService(session)
+        return Response(service.get_status(), status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def workflow_markdown(self, request, pk=None):
+        session = self.get_object()
+        service = ProjectWorkflowService(session)
+        return Response(
+            {
+                "project_plan_path": str(service.md_path),
+                "markdown": service.get_markdown(),
+            },
+            status=status.HTTP_200_OK,
         )
-
-        result = orchestrator.run(
-            session_id=pk,
-            user_input=user_input
-        )
-
-        return Response(result)
 
 
 class InteractionViewSet(viewsets.ReadOnlyModelViewSet):
@@ -72,6 +206,18 @@ class PendingActionViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
         pending = self.get_object()
+
+        if pending.tool_name == "execute_step":
+            try:
+                service = ProjectWorkflowService(pending.session)
+                result = service.execute_approved_step(pending)
+                pending.confirmed = True
+                pending.executed = True
+                pending.save(update_fields=["confirmed", "executed"])
+                pending.delete()
+                return Response(result, status=status.HTTP_200_OK)
+            except ValueError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         orchestrator = CopilotOrchestrator(
             workspace_path=settings.WORKSPACE_PATH
@@ -112,6 +258,14 @@ class PendingActionViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         pending = self.get_object()
+        if pending.tool_name == "execute_step":
+            try:
+                service = ProjectWorkflowService(pending.session)
+                result = service.reject_pending_step(pending)
+                pending.delete()
+                return Response(result, status=status.HTTP_200_OK)
+            except ValueError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         pending.delete()
 
         return Response({
@@ -284,6 +438,30 @@ class SessionStartAPIView(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class SessionKnowledgeReindexAPIView(APIView):
+    def post(self, request, session_id):
+        Session.objects.get(id=session_id)
+        workspace = Path(settings.WORKSPACE_PATH) / "sessions" / f"session_{session_id}"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        memory = SessionMemory(session_id=session_id, workspace_path=workspace)
+        force_value = request.data.get("force", False)
+        force = force_value if isinstance(force_value, bool) else str_to_bool(str(force_value))
+        result = memory.reindex_knowledge(force=force)
+        return Response(result, status=status.HTTP_200_OK)
+
+
+class SessionKnowledgeStatsAPIView(APIView):
+    def get(self, request, session_id):
+        Session.objects.get(id=session_id)
+        workspace = Path(settings.WORKSPACE_PATH) / "sessions" / f"session_{session_id}"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        memory = SessionMemory(session_id=session_id, workspace_path=workspace)
+        result = memory.get_knowledge_stats()
+        return Response(result, status=status.HTTP_200_OK)
 
 
 class CopilotAPIView(APIView):

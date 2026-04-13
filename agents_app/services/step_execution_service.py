@@ -1,11 +1,18 @@
 from pathlib import Path
 from typing import Dict, List
 
+from agents_app.agents.core.execution_guard import execution_guard_agent
 from agents_app.agents.generator_agent import generator_agent
 from agents_app.agents.actions.test_agent import test_agent
 from agents_app.agents.actions import editor_agent
+from agents_app.contracts import (
+    parse_edit_result,
+    parse_generation_result,
+    parse_validation_result,
+)
+from agents_app.policies.execution_guard import validate_candidate_paths
 from agents_app.state.project_state_repository import ProjectStateRepository
-from agents_app.utils import safe_json_parse
+from agents_app.utils import extract_text_from_run, safe_json_parse
 
 
 class StepExecutionService:
@@ -43,6 +50,37 @@ class StepExecutionService:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(file["content"], encoding="utf-8")
 
+    def _guard_generated_files(self, *, step: Dict, generated_paths: List[str]) -> None:
+        allowed = list(step.get("outputs", []))
+        validate_candidate_paths(
+            workspace_root=self.workspace,
+            candidate_paths=generated_paths,
+            allowed_paths=allowed,
+        )
+
+        # Advisory LLM guard after deterministic checks.
+        try:
+            raw = extract_text_from_run(
+                execution_guard_agent.run(
+                    str(
+                        {
+                            "workspace_root": str(self.workspace),
+                            "operation_type": "step_file_write",
+                            "allowed_paths": allowed,
+                            "candidate_paths": generated_paths,
+                        }
+                    )
+                )
+            )
+            decision = safe_json_parse(raw)
+            if decision.get("allow") is False:
+                violations = decision.get("violations", [])
+                raise ValueError(f"ExecutionGuard blocked step execution: {violations}")
+        except ValueError as exc:
+            # If parsing fails we still trust deterministic guard; only raise for explicit block.
+            if "ExecutionGuard blocked step execution" in str(exc):
+                raise
+
     # -------------------------
     # Core Execution
     # -------------------------
@@ -79,12 +117,12 @@ class StepExecutionService:
         )
 
         gen_raw = getattr(gen_out, "content", str(gen_out))
-        gen_data = safe_json_parse(gen_raw)
+        gen_data = parse_generation_result(safe_json_parse(gen_raw))
 
-        if gen_data.get("status") != "success":
+        if gen_data.status != "success":
             self.state_repo.mark_step_failed(
                 step["step"],
-                gen_data.get("notes", "Generator failed")
+                gen_data.notes or "Generator failed"
             )
             return {
                 "status": "blocked",
@@ -95,8 +133,13 @@ class StepExecutionService:
         # -------------------------
         # 2. Write files
         # -------------------------
+        generated_files = [{"path": item.path, "content": item.content} for item in gen_data.files]
+        self._guard_generated_files(
+            step=step,
+            generated_paths=[item["path"] for item in generated_files],
+        )
 
-        self._write_files(gen_data["files"])
+        self._write_files(generated_files)
 
         # -------------------------
         # 3. Test
@@ -104,7 +147,7 @@ class StepExecutionService:
 
         test_prompt = {
             "step": step,
-            "files": gen_data["files"],
+            "files": generated_files,
             "workspace": str(self.workspace)
         }
 
@@ -113,17 +156,22 @@ class StepExecutionService:
         )
 
         test_raw = getattr(test_out, "content", str(test_out))
-        test_data = safe_json_parse(test_raw)
+        test_data = parse_validation_result(safe_json_parse(test_raw))
 
         # -------------------------
         # 4. Fix if needed
         # -------------------------
 
-        if test_data.get("status") != "passed":
+        if test_data.status != "passed":
+            failed_checks = [
+                check.details or check.check
+                for check in test_data.checks
+                if check.result == "fail"
+            ]
             editor_prompt = {
                 "step": step,
-                "errors": test_data.get("errors"),
-                "files": gen_data["files"]
+                "errors": failed_checks,
+                "files": generated_files
             }
 
             edit_out = editor_agent.run(
@@ -131,9 +179,9 @@ class StepExecutionService:
             )
 
             edit_raw = getattr(edit_out, "content", str(edit_out))
-            edit_data = safe_json_parse(edit_raw)
+            edit_data = parse_edit_result(safe_json_parse(edit_raw))
 
-            if edit_data.get("status") != "success":
+            if edit_data.status != "success":
                 self.state_repo.mark_step_failed(
                     step["step"],
                     "Editor could not fix step"
@@ -145,7 +193,12 @@ class StepExecutionService:
                 }
 
             # Apply fixes
-            self._write_files(edit_data["files"])
+            edit_files = [{"path": item.path, "content": item.content} for item in edit_data.files]
+            self._guard_generated_files(
+                step=step,
+                generated_paths=[item["path"] for item in edit_files],
+            )
+            self._write_files(edit_files)
 
             # Re-test
             retest_out = test_agent.run(
@@ -153,9 +206,9 @@ class StepExecutionService:
             )
 
             retest_raw = getattr(retest_out, "content", str(retest_out))
-            retest_data = safe_json_parse(retest_raw)
+            retest_data = parse_validation_result(safe_json_parse(retest_raw))
 
-            if retest_data.get("status") != "passed":
+            if retest_data.status != "passed":
                 self.state_repo.mark_step_failed(
                     step["step"],
                     "Tests still failing after edit"
@@ -172,11 +225,11 @@ class StepExecutionService:
 
         self.state_repo.mark_step_completed(
             step["step"],
-            files=[f["path"] for f in gen_data["files"]]
+            files=[f.path for f in gen_data.files]
         )
 
         return {
             "status": "step_completed",
             "step": step["step"],
-            "generated_files": [f["path"] for f in gen_data["files"]]
+            "generated_files": [f.path for f in gen_data.files]
         }

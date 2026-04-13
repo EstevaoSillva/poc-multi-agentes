@@ -1,7 +1,7 @@
-from agno.tools import Tool
+from agno.tools import Toolkit
 from pathlib import Path
 
-class ReadFileTool(Tool):
+class ReadFileTool(Toolkit):
     name = "read_file"
     description = "Read file content"
 
